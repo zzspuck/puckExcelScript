@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 import xlrd
 import os
 import glob
 import re
+from datetime import datetime
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -12,10 +13,11 @@ print("Excel Merge Tool")
 print("=" * 60)
 
 excel_files = []
-for f in glob.glob(os.path.join(script_dir, '*.xls')):
-    filename = os.path.basename(f)
-    if not filename.startswith('huizong'):
-        excel_files.append(f)
+for pattern in ['*.xls', '*.xlsx', '*.xlsm']:
+    for f in glob.glob(os.path.join(script_dir, pattern)):
+        filename = os.path.basename(f)
+        if not filename.startswith('huizong'):
+            excel_files.append(f)
 
 # Windows natural sort: 1-1, 1-2, ..., 1-9, 1-10, 1-11
 def natural_key(path):
@@ -45,18 +47,35 @@ out_row = 2
 total = 0
 skipped_files = []
 
-def get_value(sheet, r, c, book):
-    cell = sheet.cell(r, c)
-    if cell.ctype == 3:
-        try:
-            dt = xlrd.xldate_as_datetime(cell.value, book.datemode)
-            return dt.strftime('%Y-%m-%d')
-        except:
+def open_excel_file(file_path):
+    """Open Excel file and return (book, file_type) tuple"""
+    if file_path.lower().endswith('.xls'):
+        return xlrd.open_workbook(file_path), 'xls'
+    else:  # .xlsx, .xlsm
+        return load_workbook(file_path, data_only=True), 'xlsx'
+
+def get_value(sheet, r, c, book, file_type):
+    """Get cell value from sheet, handling both xls and xlsx formats"""
+    if file_type == 'xls':
+        cell = sheet.cell(r, c)
+        if cell.ctype == 3:  # Date type
+            try:
+                dt = xlrd.xldate_as_datetime(cell.value, book.datemode)
+                return dt
+            except:
+                return cell.value
+        elif cell.ctype == 0:  # Empty
+            return ''
+        else:
             return cell.value
-    elif cell.ctype == 0:
-        return ''
-    else:
-        return cell.value
+    else:  # xlsx
+        cell = sheet.cell(r + 1, c + 1)  # openpyxl uses 1-based indexing
+        if cell.value is None:
+            return ''
+        elif isinstance(cell.value, datetime):
+            return cell.value
+        else:
+            return cell.value
 
 # Fixed column positions: A=日期(0) B=银行(1) C=摘要(2) D=借方(3) E=贷方(4) F=余额(5)
 COL_DATE = 0
@@ -72,36 +91,45 @@ for file_path in excel_files:
 
     file_total = 0
     try:
-        book = xlrd.open_workbook(file_path)
+        book, file_type = open_excel_file(file_path)
+
+        # Get sheet list based on file type
+        if file_type == 'xls':
+            sheets = [(book.sheet_by_index(i), book.sheet_by_index(i).name) for i in range(book.nsheets)]
+            get_nrows = lambda sheet: sheet.nrows
+            get_ncols = lambda sheet: sheet.ncols
+        else:  # xlsx
+            sheets = [(book[name], name) for name in book.sheetnames]
+            get_nrows = lambda sheet: sheet.max_row
+            get_ncols = lambda sheet: sheet.max_column
 
         # Loop through all sheets
-        for sheet_idx in range(book.nsheets):
-            sheet = book.sheet_by_index(sheet_idx)
-            sheet_name = sheet.name
-
+        for sheet_idx, (sheet, sheet_name) in enumerate(sheets):
             if sheet_idx > 0:
                 print(f"  Sheet: {sheet_name}")
 
             count = 0
             # Process all rows, skip rows where A or F is empty
-            for r in range(sheet.nrows):
+            for r in range(get_nrows(sheet)):
                 # Check if column A and F both have values
-                if sheet.ncols <= COL_BALANCE:
+                if get_ncols(sheet) <= COL_BALANCE:
                     continue
 
-                date_val = get_value(sheet, r, COL_DATE, book)
-                bal_val = get_value(sheet, r, COL_BALANCE, book)
+                date_val = get_value(sheet, r, COL_DATE, book, file_type)
+                bal_val = get_value(sheet, r, COL_BALANCE, book, file_type)
 
                 # Only include rows where A and F both have values
                 if date_val != '' and bal_val != '':
-                    # Filter: only year 2025 and later
-                    year = int(str(date_val)[:4]) if str(date_val)[:4].isdigit() else 0
-                    if year >= 2025:
+                    # Filter: only 2025-12 and later
+                    year = date_val.year if hasattr(date_val, 'year') else 0
+                    month = date_val.month if hasattr(date_val, 'month') else 0
+                    # Skip only if year/month extraction failed OR date is before 2025-12
+                    if (year > 0 and month > 0) and (year > 2025 or (year == 2025 and month == 12)):
                         ws_out.cell(row=out_row, column=1, value=date_val)
-                        ws_out.cell(row=out_row, column=2, value=get_value(sheet, r, COL_BANK, book))
-                        ws_out.cell(row=out_row, column=3, value=get_value(sheet, r, COL_SUMMARY, book))
-                        ws_out.cell(row=out_row, column=4, value=get_value(sheet, r, COL_DEBIT, book))
-                        ws_out.cell(row=out_row, column=5, value=get_value(sheet, r, COL_CREDIT, book))
+                        ws_out.cell(row=out_row, column=2, value=get_value(sheet, r, COL_BANK, book, file_type))
+                        ws_out.cell(row=out_row, column=3, value=get_value(sheet, r, COL_SUMMARY, book, file_type))
+                        ws_out.cell(row=out_row, column=4, value=get_value(sheet, r, COL_DEBIT, book, file_type))
+                        ws_out.cell(row=out_row, column=5, value=get_value(sheet, r, COL_CREDIT, book, file_type))
                         ws_out.cell(row=out_row, column=6, value=bal_val)
                         out_row += 1
                         count += 1
