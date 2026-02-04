@@ -120,11 +120,11 @@ for file_path in excel_files:
 
                 # Only include rows where A and F both have values
                 if date_val != '' and bal_val != '':
-                    # Filter: only 2025-12 and later
+                    # Filter: only 2026 and later
                     year = date_val.year if hasattr(date_val, 'year') else 0
                     month = date_val.month if hasattr(date_val, 'month') else 0
-                    # Skip only if year/month extraction failed OR date is before 2025-12
-                    if (year > 0 and month > 0) and (year > 2025 or (year == 2025 and month == 12)):
+                    # Skip only if year/month extraction failed OR date is before 2026
+                    if (year > 0 and month > 0) and year >= 2026:
                         ws_out.cell(row=out_row, column=1, value=date_val)
                         ws_out.cell(row=out_row, column=2, value=get_value(sheet, r, COL_BANK, book, file_type))
                         ws_out.cell(row=out_row, column=3, value=get_value(sheet, r, COL_SUMMARY, book, file_type))
